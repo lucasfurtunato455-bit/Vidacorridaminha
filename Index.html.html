@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LifeRunning</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-sA+e2JkGkFzvHj8Xv3j3Qb3aMZ9v+V8gqk2R0b8n0yk=" crossorigin=""/>
+
+  <style>
+    /* CSS variables (tema escuro) */
+    :root{
+      --bg:#0b0f14;
+      --surface:#0f151a;
+      --muted:#9aa6b2;
+      --accent:#7c5cff;
+      --success:#3ddc84;
+      --danger:#ff6b6b;
+      --glass: rgba(255,255,255,0.03);
+      --card-shadow: 0 6px 18px rgba(2,6,23,0.6);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background:var(--bg); color:#e6eef6;}
+
+    header{padding:18px 20px; display:flex; align-items:center; justify-content:space-between; gap:12px; background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); border-bottom:1px solid rgba(255,255,255,0.03)}
+    header h1{margin:0;font-size:20px; letter-spacing:0.6px}
+    header p{margin:0;color:var(--muted); font-size:13px}
+
+    .container{display:grid; grid-template-columns: 1fr 360px; gap:18px; padding:18px; max-width:1200px; margin:18px auto;}
+
+    /* Make responsive: stacked on small screens */
+    @media (max-width:900px){
+      .container{grid-template-columns:1fr; padding:12px}
+      aside{order:2}
+    }
+
+    /* Map area */
+    #map{height:70vh; min-height:420px; border-radius:12px; box-shadow:var(--card-shadow); border:1px solid rgba(255,255,255,0.03);}
+
+    aside{background:var(--surface); padding:16px; border-radius:12px; box-shadow:var(--card-shadow); display:flex; flex-direction:column; gap:12px}
+
+    .stats{display:flex; gap:12px; flex-wrap:wrap}
+    .stat{background:var(--glass); padding:12px; border-radius:8px; flex:1; min-width:120px}
+    .stat h3{margin:0;font-size:18px}
+    .stat p{margin:6px 0 0; color:var(--muted); font-size:13px}
+
+    .controls{display:flex; gap:8px; margin-top:6px}
+    button{appearance:none;border:0;padding:10px 14px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); color:#fff; cursor:pointer; font-weight:600}
+    button.primary{background:linear-gradient(90deg,var(--accent), #5b8bff); box-shadow:0 6px 18px rgba(124,92,255,0.12)}
+    button.ghost{background:transparent; border:1px solid rgba(255,255,255,0.04)}
+    button.danger{background:linear-gradient(90deg,var(--danger), #ff8f8f)}
+
+    .leaderboard{overflow:auto; max-height:52vh; border-radius:8px; padding:8px; border:1px solid rgba(255,255,255,0.02);} 
+    table{width:100%; border-collapse:collapse; font-size:13px}
+    th,td{padding:8px 6px; text-align:left; border-bottom:1px dashed rgba(255,255,255,0.02)}
+    th{color:var(--muted); font-size:12px}
+
+    .footer-note{color:var(--muted); font-size:12px; margin-top:6px}
+
+    /* Loading + error */
+    .overlay{position:absolute; inset:0; display:flex; align-items:center; justify-content:center}
+
+    /* Modal */
+    .modal-backdrop{position:fixed; inset:0; background:rgba(2,6,23,0.7); display:none; align-items:center; justify-content:center}
+    .modal{background:var(--surface); padding:18px; border-radius:12px; width:calc(100% - 40px); max-width:420px}
+    .modal h2{margin-top:0}
+    .input{display:flex; flex-direction:column; gap:6px; margin-top:8px}
+    input[type=text]{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04); background:transparent; color:#e6eef6}
+
+    .small{font-size:12px;color:var(--muted)}
+
+    /* Banner to show when Supabase isn't configured */
+    .warning{color:var(--danger); font-weight:600}
+
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>LifeRunning</h1>
+      <p>Toque "Iniciar" para começar a rastrear sua caminhada. Permita o GPS quando solicitado.</p>
+      <div id="supabaseNotice" class="small" style="margin-top:6px"></div>
+    </div>
+    <div class="small">Tema escuro • Mobile-friendly</div>
+  </header>
+
+  <main class="container">
+    <!-- Map column -->
+    <section>
+      <div id="map"></div>
+      <div style="display:flex; gap:8px; justify-content:center; padding-top:12px;">
+        <button id="startBtn" class="primary">Iniciar</button>
+        <button id="stopBtn" class="ghost" disabled>Parar</button>
+        <button id="submitBtn" class="primary" disabled>Enviar Pontuação</button>
+      </div>
+    </section>
+
+    <!-- Sidebar: stats + leaderboard -->
+    <aside>
+      <div class="stats">
+        <div class="stat">
+          <h3 id="distance">0 m</h3>
+          <p>Distância percorrida</p>
+        </div>
+        <div class="stat">
+          <h3 id="score">0 pontos</h3>
+          <p>Pontuação atual</p>
+        </div>
+        <div class="stat">
+          <h3 id="speed">—</h3>
+          <p>Velocidade atual</p>
+        </div>
+      </div>
+
+      <div class="footer-note">Status: <span id="status">Idle</span></div>
+
+      <h3 style="margin-top:10px">Ranking Global (Top 20)</h3>
+      <div class="leaderboard" id="leaderboard">
+        <!-- tabela será preenchida via JS -->
+        <table id="lbTable">
+          <thead>
+            <tr><th>#</th><th>Jogador</th><th>Pontos</th><th>Distância (m)</th><th>Data</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="small" style="margin-top:10px">OBS: Ao enviar sua pontuação, seu nome ficará disponível no ranking global.</div>
+    </aside>
+  </main>
+
+  <!-- Modal para inserir nome -->
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2>Enviar Pontuação</h2>
+      <p class="small">Insira seu nome para salvar a pontuação no ranking global.</p>
+      <div class="input">
+        <label for="playerName" class="small">Nome do jogador</label>
+        <input id="playerName" type="text" maxlength="30" placeholder="Seu nome" />
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px">
+        <button id="cancelSubmit" class="ghost">Cancelar</button>
+        <button id="confirmSubmit" class="primary">Confirmar e Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-o9N1j7k2fJb7gYp2bqv3lGd2z2rjv4qv6f1J2S0z0+M=" crossorigin=""></script>
+
+  <!-- Supabase JS (ESM) e principal script -->
+  <script type="module">
+    // ----- CONFIGURAÇÃO SUPABASE -----
+    // Substitua pelas suas credenciais do Supabase (crie um projeto em https://supabase.com)
+    const SUPABASE_URL = 'YOUR_SUPABASE_URL'; // ex: https://abcd1234.supabase.co
+    const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+    // Import do cliente Supabase (via CDN ESM)
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    // Validador simples de URL
+    function isValidUrl(str){
+      try{ new URL(str); return true; }catch(e){ return false; }
+    }
+
+    // supabaseClient será null se não configurado corretamente
+    let supabaseClient = null;
+    if(SUPABASE_URL && SUPABASE_ANON_KEY && isValidUrl(SUPABASE_URL) && !SUPABASE_URL.includes('YOUR_')){
+      try{
+        supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      }catch(e){
+        console.error('Erro ao criar cliente Supabase:', e);
+        supabaseClient = null;
+      }
+    } else {
+      console.warn('Supabase não configurado ou URL inválido. Usando fallback local (localStorage) para ranking.');
+    }
+
+    // Se supabaseClient for null, armazenaremos pontuações localmente para demo
+    const LOCAL_STORAGE_KEY = 'liferunning_local_scores_v1';
+
+    // ----- VARIÁVEIS DE ESTADO -----
+    let map, polyline;
+    let currentMarker = null, accuracyCircle = null;
+    let liveWatchId = null; // watch sempre ativo para mapa ao vivo
+    let path = []; // lista de {lat, lng, timestamp}
+    let totalDistance = 0; // em metros
+    let lastPos = null; // última posição usada para cálculo de distância
+    let isTracking = false; // controla se estamos pontuando/distanciando
+    let hasCentered = false; // já centralizamos o mapa na posição?
+
+    // Elementos do DOM
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const statusEl = document.getElementById('status');
+    const distanceEl = document.getElementById('distance');
+    const scoreEl = document.getElementById('score');
+    const speedEl = document.getElementById('speed');
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const playerNameInput = document.getElementById('playerName');
+    const confirmSubmit = document.getElementById('confirmSubmit');
+    const cancelSubmit = document.getElementById('cancelSubmit');
+    const lbTableBody = document.querySelector('#lbTable tbody');
+    const supabaseNotice = document.getElementById('supabaseNotice');
+
+    // Inicializa o mapa Leaflet
+    function initMap(){
+      map = L.map('map', { zoomControl:false }).setView([0,0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+
+      // polyline visualizando o caminho
+      polyline = L.polyline([], { color: '#7c5cff', weight:5, opacity:0.9 }).addTo(map);
+    }
+
+    // Haversine: calcula distância em metros entre dois pontos lat/lng
+    function haversine(a, b){
+      const toRad = v => v * Math.PI / 180;
+      const R = 6371000; // raio da Terra em metros
+      const dLat = toRad(b.lat - a.lat);
+      const dLon = toRad(b.lng - a.lng);
+      const lat1 = toRad(a.lat);
+      const lat2 = toRad(b.lat);
+      const sinDLat = Math.sin(dLat/2);
+      const sinDLon = Math.sin(dLon/2);
+      const aa = sinDLat*sinDLat + Math.cos(lat1)*Math.cos(lat2)*sinDLon*sinDLon;
+      const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1-aa));
+      return R * c;
+    }
+
+    // Atualiza elementos visuais (distância, score, velocidade)
+    function updateStats(){
+      distanceEl.textContent = Math.round(totalDistance) + ' m';
+      scoreEl.textContent = Math.round(totalDistance) + ' pontos'; // 1 m = 1 ponto
+      if(path.length >= 2){
+        const p1 = path[path.length-2];
+        const p2 = path[path.length-1];
+        const dt = (p2.timestamp - p1.timestamp)/1000; //s
+        if(dt > 0){
+          const spd = haversine(p1, p2) / dt; // m/s
+          speedEl.textContent = (spd*3.6).toFixed(1) + ' km/h';
+        }
+      } else {
+        speedEl.textContent = '—';
+      }
+    }
+
+    // Atualiza marcador/círculo de precisão no mapa (ao vivo)
+    function updateLiveMarker(lat, lng, accuracy){
+      const latlng = [lat, lng];
+      if(!currentMarker){
+        currentMarker = L.marker(latlng).addTo(map);
+      } else {
+        currentMarker.setLatLng(latlng);
+      }
+
+      if(!accuracyCircle){
+        accuracyCircle = L.circle(latlng, { radius: accuracy || 0, weight:1, opacity:0.6, fillOpacity:0.08 });
+        accuracyCircle.addTo(map);
+      } else {
+        accuracyCircle.setLatLng(latlng);
+        if(typeof accuracy === 'number') accuracyCircle.setRadius(accuracy);
+      }
+
+      if(!hasCentered){
+        hasCentered = true;
+        map.setView(latlng, 17, { animate:true });
+      }
+    }
+
+    // Handler para novas posições do GPS (sempre roda para mapa ao vivo)
+    function onPosition(position){
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
+      const timestamp = position.timestamp || Date.now();
+
+      // Atualiza o mapa ao vivo SEMPRE
+      updateLiveMarker(lat, lng, accuracy);
+      statusEl.textContent = isTracking ? 'Rastreamento ativo' : 'Mapa ao vivo ativo';
+
+      // Se estiver rastreando, acumula distância e desenha caminho
+      if(isTracking){
+        const point = { lat, lng, timestamp };
+
+        if(lastPos){
+          const d = haversine(lastPos, point);
+          if(d < 200){ // filtra saltos suspeitos
+            totalDistance += d;
+          }
+        }
+
+        path.push(point);
+        lastPos = point;
+        polyline.addLatLng([lat, lng]);
+        updateStats();
+        submitBtn.disabled = false; // habilita envio após começar a se mover
+      }
+    }
+
+    // Erros de GPS
+    function onPositionError(err){
+      console.error('Erro GPS:', err);
+      const msg = err && (err.message || err.code) ? (err.message || ('Código '+err.code)) : 'desconhecido';
+      statusEl.textContent = 'Erro de localização: ' + msg;
+      if(err && err.code === 1){ // PERMISSION_DENIED
+        alert('Permissão de localização negada. Por favor, permita o GPS para usar o LifeRunning.');
+      }
+    }
+
+    // Inicia o rastreamento (SOMENTE alterna flag; o watch ao vivo já está ligado)
+    function startTracking(){
+      if(!('geolocation' in navigator)){
+        alert('Geolocalização não é suportada neste navegador.');
+        return;
+      }
+      resetSession();
+      isTracking = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      statusEl.textContent = 'Rastreamento ativo';
+    }
+
+    // Para o rastreamento (mantém mapa ao vivo)
+    function stopTracking(){
+      isTracking = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = 'Mapa ao vivo ativo';
+    }
+
+    // Limpa a sessão atual de rastreamento
+    function resetSession(){
+      path = [];
+      totalDistance = 0;
+      lastPos = null;
+      if(polyline) polyline.setLatLngs([]);
+      updateStats();
+      submitBtn.disabled = true;
+    }
+
+    // Abre o modal para enviar pontuação
+    function openSubmitModal(){
+      playerNameInput.value = '';
+      modalBackdrop.style.display = 'flex';
+      playerNameInput.focus();
+    }
+
+    // Fecha modal
+    function closeSubmitModal(){
+      modalBackdrop.style.display = 'none';
+    }
+
+    // Fallback local: lê e escreve pontuações no localStorage
+    function readLocalScores(){
+      try{
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if(!raw) return [];
+        const arr = JSON.parse(raw);
+        if(!Array.isArray(arr)) return [];
+        return arr;
+      }catch(e){
+        console.error('Erro lendo scores locais:', e);
+        return [];
+      }
+    }
+    function writeLocalScores(arr){
+      try{
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(arr));
+      }catch(e){
+        console.error('Erro escrevendo scores locais:', e);
+      }
+    }
+
+    // Envia a pontuação ao Supabase ou salva localmente se não configurado
+    async function submitScore(name){
+      const distanceMeters = Math.round(totalDistance);
+      const score = distanceMeters; // 1 m = 1 ponto
+
+      if(distanceMeters < 1){
+        alert('Distância muito pequena para enviar. Caminhe um pouco mais antes de enviar.');
+        return;
+      }
+
+      confirmSubmit.disabled = true;
+      confirmSubmit.textContent = 'Enviando...';
+
+      try{
+        if(supabaseClient){
+          const { error } = await supabaseClient
+            .from('scores')
+            .insert([{ name: name || 'Anônimo', distance_meters: distanceMeters, score }]);
+
+          if(error){
+            console.error('Erro ao enviar pontuação (Supabase):', error);
+            alert('Erro ao enviar pontuação ao servidor. Salvando localmente como fallback.');
+            const local = readLocalScores();
+            local.push({ id: Date.now(), name: name || 'Anônimo', distance_meters: distanceMeters, score, created_at: new Date().toISOString() });
+            writeLocalScores(local);
+          } else {
+            alert('Pontuação enviada com sucesso!');
+          }
+        } else {
+          const local = readLocalScores();
+          local.push({ id: Date.now(), name: name || 'Anônimo', distance_meters: distanceMeters, score, created_at: new Date().toISOString() });
+          writeLocalScores(local);
+          alert('Supabase não configurado. Pontuação salva localmente (demo).');
+        }
+
+        await loadLeaderboard();
+        resetSession();
+        closeSubmitModal();
+
+      }catch(e){
+        console.error('Erro inesperado ao enviar pontuação:', e);
+        alert('Erro inesperado ao enviar pontuação.');
+      } finally {
+        confirmSubmit.disabled = false;
+        confirmSubmit.textContent = 'Confirmar e Enviar';
+      }
+    }
+
+    // Carrega o leaderboard (top 20)
+    async function loadLeaderboard(){
+      lbTableBody.innerHTML = '<tr><td colspan="5" class="small">Carregando...</td></tr>';
+
+      try{
+        if(supabaseClient){
+          const { data, error } = await supabaseClient
+            .from('scores')
+            .select('id,name,score,distance_meters,created_at')
+            .order('score', {ascending: false})
+            .limit(20);
+
+          if(error){
+            console.error('Erro ao buscar leaderboard (Supabase):', error);
+            lbTableBody.innerHTML = '<tr><td colspan="5">Erro ao carregar ranking.</td></tr>';
+            return;
+          }
+
+          if(!data || data.length === 0){
+            lbTableBody.innerHTML = '<tr><td colspan="5">Nenhuma pontuação disponível.</td></tr>';
+            return;
+          }
+
+          lbTableBody.innerHTML = '';
+          data.forEach((row, idx) =>{
+            const d = new Date(row.created_at);
+            const dateLabel = d.toLocaleString('pt-BR');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${idx+1}</td><td>${escapeHtml(row.name)}</td><td>${row.score}</td><td>${Math.round(row.distance_meters)}</td><td>${dateLabel}</td>`;
+            lbTableBody.appendChild(tr);
+          });
+
+        } else {
+          const local = readLocalScores();
+          if(!local || local.length === 0){
+            lbTableBody.innerHTML = '<tr><td colspan="5">Nenhuma pontuação disponível (local).</td></tr>';
+            return;
+          }
+
+          local.sort((a,b) => (b.score || 0) - (a.score || 0));
+          const top = local.slice(0,20);
+          lbTableBody.innerHTML = '';
+          top.forEach((row, idx) =>{
+            const d = new Date(row.created_at);
+            const dateLabel = d.toLocaleString('pt-BR');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${idx+1}</td><td>${escapeHtml(row.name)}</td><td>${row.score}</td><td>${Math.round(row.distance_meters)}</td><td>${dateLabel}</td>`;
+            lbTableBody.appendChild(tr);
+          });
+        }
+
+      }catch(e){
+        console.error(e);
+        lbTableBody.innerHTML = '<tr><td colspan="5">Erro inesperado.</td></tr>';
+      }
+    }
+
+    // Small helper to evitar XSS simples
+    function escapeHtml(str){
+      if(!str) return '';
+      return String(str).replace(/[&<>\"']/g, (c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;','\'':'&#39;'})[c]);
+    }
+
+    function setupLiveWatch(){
+      if(!('geolocation' in navigator)){
+        statusEl.textContent = 'Geolocalização não suportada';
+        return;
+      }
+
+      // Regras dos browsers: precisa HTTPS para funcionar no iOS/Android/desktop
+      if(location.protocol !== 'https:' && location.hostname !== 'localhost'){
+        console.warn('Este site não está em HTTPS. A geolocalização pode não funcionar em alguns navegadores.');
+      }
+
+      liveWatchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000,
+      });
+    }
+
+    // Inicializações e listeners
+    function setup(){
+      initMap();
+
+      if(supabaseClient){
+        supabaseNotice.textContent = 'Ranking online ativado (Supabase conectado).';
+      } else {
+        supabaseNotice.innerHTML = '<span class="warning">Supabase não configurado — ranking local ativado. Substitua SUPABASE_URL e SUPABASE_ANON_KEY para salvar online.</span>';
+      }
+
+      loadLeaderboard();
+      setupLiveWatch(); // liga o mapa ao vivo na tela inicial
+
+      startBtn.addEventListener('click', startTracking);
+      stopBtn.addEventListener('click', stopTracking);
+
+      submitBtn.addEventListener('click', ()=>{
+        if(totalDistance < 1){
+          alert('Distância muito pequena para enviar. Caminhe um pouco mais antes de enviar.');
+          return;
+        }
+        openSubmitModal();
+      });
+
+      cancelSubmit.addEventListener('click', closeSubmitModal);
+
+      confirmSubmit.addEventListener('click', async ()=>{
+        const name = playerNameInput.value.trim() || 'Anônimo';
+        await submitScore(name);
+      });
+
+      modalBackdrop.addEventListener('click', (e)=>{ if(e.target === modalBackdrop) closeSubmitModal(); });
+    }
+
+    // start
+    setup();
+  </script>
+
+</body>
+</html>
